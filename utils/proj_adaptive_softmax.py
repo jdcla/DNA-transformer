@@ -1,13 +1,13 @@
 from collections import defaultdict
-
+from pdb import set_trace
 import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-CUDA_MAJOR = int(torch.version.cuda.split('.')[0])
-CUDA_MINOR = int(torch.version.cuda.split('.')[1])
+# CUDA_MAJOR = int(torch.version.cuda.split('.')[0])
+# CUDA_MINOR = int(torch.version.cuda.split('.')[1])
 
 class ProjectedAdaptiveLogSoftmax(nn.Module):
     def __init__(self, n_token, d_embed, d_proj, cutoffs, div_val=1,
@@ -32,7 +32,6 @@ class ProjectedAdaptiveLogSoftmax(nn.Module):
 
         self.out_layers = nn.ModuleList()
         self.out_projs = nn.ParameterList()
-
         if div_val == 1:
             for i in range(len(self.cutoffs)):
                 if d_proj != d_embed:
@@ -60,22 +59,16 @@ class ProjectedAdaptiveLogSoftmax(nn.Module):
         if proj is None:
             logit = F.linear(hidden, weight, bias=bias)
         else:
-            # if CUDA_MAJOR <= 9 and CUDA_MINOR <= 1:
             proj_hid = F.linear(hidden, proj.t().contiguous())
             logit = F.linear(proj_hid, weight, bias=bias)
-            # else:
-            #     logit = torch.einsum('bd,de,ev->bv', (hidden, proj, weight.t()))
-            #     if bias is not None:
-            #         logit = logit + bias
 
         return logit
 
-    def forward(self, hidden, target, keep_order=False):
+    def forward(self, hidden, target, criterion=None, keep_order=False):
         '''
             hidden :: [len*bsz x d_proj]
             target :: [len*bsz]
         '''
-
         if hidden.size(0) != target.size(0):
             raise RuntimeError('Input and target should have the same size '
                                'in the batch dimension.')
@@ -83,8 +76,11 @@ class ProjectedAdaptiveLogSoftmax(nn.Module):
         if self.n_clusters == 0:
             logit = self._compute_logit(hidden, self.out_layers[0].weight,
                                         self.out_layers[0].bias, self.out_projs[0])
-            nll = -F.log_softmax(logit, dim=-1) \
-                    .gather(1, target.unsqueeze(1)).squeeze(1)
+            if criterion is None:
+                nll = -F.log_softmax(logit, dim=-1) \
+                        .gather(1, target.unsqueeze(1)).squeeze(1) # Problem with gather for merge
+            else:
+                nll = criterion(logit, target)
         else:
             # construct weights and biases
             weights, biases = [], []
@@ -148,4 +144,4 @@ class ProjectedAdaptiveLogSoftmax(nn.Module):
 
                 offset += logprob_i.size(0)
 
-        return nll
+        return nll, logit

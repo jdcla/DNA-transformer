@@ -1,4 +1,5 @@
 import os
+import numpy as np
 from collections import Counter, OrderedDict
 
 import torch
@@ -45,6 +46,14 @@ class Vocab(object):
                 symbols = self.tokenize(line, add_eos=add_eos)
                 self.counter.update(symbols)
                 sents.append(symbols)
+
+        return sents
+
+    def create_tokens(self, size, data):
+        """ ADD COUNTING GENOME"""
+        symbols = np.arange(size)
+        self.counter.update(np.hstack((data, symbols)))
+        sents = [symbols]
 
         return sents
 

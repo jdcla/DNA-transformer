@@ -24,7 +24,7 @@ def create_exp_dir(dir_path, scripts_to_save=None, debug=False):
     if not os.path.exists(dir_path):
         os.makedirs(dir_path)
 
-    print('Experiment dir : {}'.format(dir_path))
+    print('Working directory : {}'.format(dir_path))
     if scripts_to_save is not None:
         script_path = os.path.join(dir_path, 'scripts')
         if not os.path.exists(script_path):

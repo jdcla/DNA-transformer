@@ -1,122 +1,93 @@
-# coding: utf-8
+import os
+import json
 import argparse
-import time
-import math
-import os, sys
 
+import numpy as np
 import torch
 
-from data_utils import get_lm_corpus
 from mem_transformer import MemTransformerLM
-from utils.exp_utils import get_logger
+from utils.dna_functions import Logger, FocalLoss
+import utils.proj_adaptive_softmax
+from data_utils import get_lm_corpus
+
 
 parser = argparse.ArgumentParser(description='PyTorch Transformer Language Model')
-parser.add_argument('--data', type=str, default='../data/wikitext-103',
-                    help='location of the data corpus')
-parser.add_argument('--dataset', type=str, default='wt103',
-                    choices=['wt103', 'lm1b', 'enwik8', 'text8'],
-                    help='dataset name')
-parser.add_argument('--split', type=str, default='all',
-                    choices=['all', 'valid', 'test'],
-                    help='which split to evaluate')
-parser.add_argument('--batch_size', type=int, default=10,
-                    help='batch size')
-parser.add_argument('--tgt_len', type=int, default=5,
-                    help='number of tokens to predict')
-parser.add_argument('--ext_len', type=int, default=0,
-                    help='length of the extended context')
-parser.add_argument('--mem_len', type=int, default=0,
-                    help='length of the retained previous heads')
-parser.add_argument('--clamp_len', type=int, default=-1,
-                    help='max positional embedding index')
-parser.add_argument('--cuda', action='store_true',
-                    help='use CUDA')
-parser.add_argument('--work_dir', type=str, required=True,
-                    help='path to the work_dir')
-parser.add_argument('--no_log', action='store_true',
-                    help='do not log the eval result')
-parser.add_argument('--same_length', action='store_true',
-                    help='set same length attention with masking')
-args = parser.parse_args()
-assert args.ext_len >= 0, 'extended context length must be non-negative'
+parser.add_argument('--model_path', type=str,
+                    help='model path')
+input_args = parser.parse_known_args()[0]
+print(input_args)
+with open(input_args.model_path, 'r') as fh:
+    args = argparse.Namespace(**json.load(fh)['args'])
+    
+args.restart_dir = '/'.join(input_args.model_path.split('/')[:-1])
 
-device = torch.device("cuda" if args.cuda else "cpu")
+device = torch.device('cuda' if args.cuda else 'cpu')
 
-# Get logger
-logging = get_logger(os.path.join(args.work_dir, 'log.txt'),
-                     log_=not args.no_log)
+n_token_in = (4 + 4 * args.methylation) ** args.merge_size
+n_token_out = 2
 
-# Load dataset
-corpus = get_lm_corpus(args.data, args.dataset)
-ntokens = len(corpus.vocab)
+print(args.coords[1:4])
 
-va_iter = corpus.get_iterator('valid', args.batch_size, args.tgt_len,
-    device=device, ext_len=args.ext_len)
-te_iter = corpus.get_iterator('test', args.batch_size, args.tgt_len,
-    device=device, ext_len=args.ext_len)
+model = MemTransformerLM(n_token_in, n_token_out, args.n_layer, args.n_head, args.d_model,
+                         args.d_head, args.d_inner, args.dropout, args.dropatt,
+                         tie_weight=args.tied, d_embed=args.d_embed, custom_emb=None,
+                         tie_projs=[False], pre_lnorm=args.pre_lnorm, tgt_len=args.tgt_len,
+                         ext_len=args.ext_len, mem_len=args.mem_len, cutoffs=[],
+                         same_length=args.same_length, clamp_len=args.clamp_len, 
+                         sample_softmax=args.sample_softmax)
 
-# Load the best saved model.
-with open(os.path.join(args.work_dir, 'model.pt'), 'rb') as f:
-    model = torch.load(f)
-model.backward_compatible()
+model.load_state_dict(torch.load(os.path.join(args.restart_dir, 'model.pt')))
 model = model.to(device)
 
-logging('Evaluating with bsz {} tgt_len {} ext_len {} mem_len {} clamp_len {}'.format(
-       args.batch_size, args.tgt_len, args.ext_len, args.mem_len, args.clamp_len))
-
-model.reset_length(args.tgt_len, args.ext_len, args.mem_len)
-if args.clamp_len > 0:
-    model.clamp_len = args.clamp_len
-if args.same_length:
-    model.same_length = True
-
-###############################################################################
-# Evaluation code
-###############################################################################
-def evaluate(eval_iter):
+def evaluate(model, eval_iter, args, criterion=None):
     # Turn on evaluation mode which disables dropout.
     model.eval()
+    model.same_length = True
+    model.reset_length(args.eval_tgt_len, args.eval_tgt_len, args.ext_ds)
+
+    # Evaluation
     total_len, total_loss = 0, 0.
-    start_time = time.time()
+    probs, targets = [], []
+    i_max = eval_iter.n_batch_same_length
+    
     with torch.no_grad():
         mems = tuple()
-        for idx, (data, target, seq_len) in enumerate(eval_iter):
-            ret = model(data, target, *mems)
-            loss, mems = ret[0], ret[1:]
+        for i, (data, target_init, seq_len) in enumerate(eval_iter):
+            if args.max_eval_steps > 0 and i >= args.max_eval_steps:
+                break
+            last = True if (i+1 == i_max) else False
+            ret = model(data, target_init, *mems, criterion=criterion, last=last)
+            loss, prob, target, mems = ret[0], ret[1], ret[2], ret[3:]
+
+            probs.append([p.reshape(-1, args.batch_size,
+                                    p.shape[1]).transpose(1, 0, 2) for p in prob])
+
+            targets.append([t.reshape(-1, args.batch_size).T for t in target])
             loss = loss.mean()
-            total_loss += seq_len * loss.item()
+            total_loss += seq_len * loss.float().item()
             total_len += seq_len
-        total_time = time.time() - start_time
-    logging('Time : {:.2f}s, {:.2f}ms/segment'.format(
-            total_time, 1000 * total_time / (idx+1)))
-    return total_loss / total_len
 
-# Run on test data.
-if args.split == 'all':
-    test_loss = evaluate(te_iter)
-    valid_loss = evaluate(va_iter)
-elif args.split == 'valid':
-    valid_loss = evaluate(va_iter)
-    test_loss = None
-elif args.split == 'test':
-    test_loss = evaluate(te_iter)
-    valid_loss = None
+    probs = [np.concatenate([p[i] for p in probs], axis=1) for i in range(len(probs[0]))]
+    targets = [np.concatenate([t[i] for t in targets], axis=1) for i in range(len(targets[0]))]
 
-def format_log(loss, split):
-    if args.dataset in ['enwik8', 'text8']:
-        log_str = '| {0} loss {1:5.2f} | {0} bpc {2:9.5f} '.format(
-            split, loss, loss / math.log(2))
-    else:
-        log_str = '| {0} loss {1:5.2f} | {0} ppl {2:9.3f} '.format(
-            split, loss, math.exp(loss))
-    return log_str
+    probs = [p.reshape(-1, p.shape[2]) for p in probs]
+    targets = [t.reshape(-1) for t in targets]
+    
+    model.same_length = False
+    model.reset_length(args.tgt_len, args.mem_len, args.ext_ds)
+    model.train()
 
-log_str = ''
-if valid_loss is not None:
-    log_str += format_log(valid_loss, 'valid')
-if test_loss is not None:
-    log_str += format_log(test_loss, 'test')
+    return total_loss / total_len, probs, targets
 
-logging('=' * 100)
-logging(log_str)
-logging('=' * 100)
+
+corpus = get_lm_corpus(args.data_path, labels=n_token_out, merge_size=args.merge_size, at_idx=args.coords[1:4])
+
+eval_batch_size = 10
+te_iter = corpus.get_iterator('test', eval_batch_size, args.eval_tgt_len,
+                              device=device, ext_len=args.ext_len)
+
+perf_logger = Logger(['AUC', 'P-R', 'acc'], True, ['val'])
+perf_logger.metrics['args'] = vars(args)
+criterion = FocalLoss(gamma=args.criterion_gamma, alpha=None)
+test_loss, test_probs, test_targets = evaluate(model, te_iter, args, criterion=criterion)
+perf_logger.log_metrics(test_targets[0], test_probs[0])
