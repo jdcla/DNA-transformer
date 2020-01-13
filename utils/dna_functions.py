@@ -1,6 +1,5 @@
 import numpy as np
 import pandas as pd
-import regex as re
 
 import torch
 import torch.nn.functional as F

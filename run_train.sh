@@ -12,13 +12,13 @@ d_model=32
 n_head=6
 n_layer=6
 dropout=0.1
-merge_size=1
 tgt_len=512
 output="output/"
 
 echo 'Run training...'
 python train.py \
     --cuda \
+    --output_path $output \
     --eval-interval 3000 \
     --data_path $data_path \
     --d_embed $d_embed \
