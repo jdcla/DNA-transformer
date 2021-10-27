@@ -9,14 +9,14 @@ This repository includes the code applied for the following two articles
 >
 >Jim Clauwaert, Willem Waegeman
 >
->https://www.biorxiv.org/content/10.1101/836163v1
+>https://ieeexplore.ieee.org/document/9246292
 
 2. ---
->**An in-depth evaluation of annotated transcription start sites in *E. coli* using deep learning**
+>**Explainability in transformer models for functional genomics**
 >
 >Jim Clauwaert, Gerben Menschaert, Willem Waegeman
 >
->To be submitted
+>https://academic.oup.com/bib/article/22/5/bbab060/6214646?login=true
     ---
 
 ## Novel transformer networks for improved sequence labeling in genomics
