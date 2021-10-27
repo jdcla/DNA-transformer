@@ -1,4 +1,3 @@
-### [WIP]
 **This is a heavily adapted fork of the Transformer-XL repository ([https://github.com/kimiyoung/transformer-xl](https://github.com/kimiyoung/transformer-xl))**
 
 
@@ -38,7 +37,7 @@ This repository includes the code applied for the following two articles
     run_TIS.sh
     run_TSS.sh
 ---
-## An in-depth evaluation of annotated transcription start sites in *E. coli* using deep learning
+## Explainability in transformer models for functional genomics
 
 **Data**
 
